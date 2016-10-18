@@ -19,6 +19,7 @@ $LOAD_PATH.unshift((bindir + '../lib').realpath)
 require 'review/preprocessor'
 require 'review/unfold'
 require 'review/version'
+require 'review/extentions'
 require 'lineinput'
 require 'stringio'
 require 'fileutils'
@@ -35,25 +36,20 @@ rescue Errno::EPIPE
 end
 
 def main
-  $KCODE = 'UTF-8' unless defined?(Encoding)
+  if File.file?("review-preproc-ext.rb")
+    if ENV["REVIEW_SAFE_MODE"].to_i & 2 > 0
+      warn "review-preproc-ext.rb is prohibited in safe mode. ignored."
+    else
+      Kernel.load File.expand_path("review-preproc-ext.rb")
+    end
+  end
 
-  param = {
-    "inencoding" => "UTF-8",
-    "outencoding" => "UTF-8",
-  }
+  param = {}
 
   mode = :output
   opts = OptionParser.new
   opts.version = ReVIEW::VERSION
   opts.banner = "Usage: #{File.basename($0)} [-c|-d|-s|--replace] [<file>...]"
-  opts.on('--inencoding=ENCODING', 'Set input encoding. (UTF-8, EUC, JIS, and
-SJIS)') {|enc|
-    param["inencoding"] = enc
-  }
-  opts.on('--outencoding=ENCODING', 'Set output encoding. (UTF-8[default], EUC
-, JIS, and SJIS)') {|enc|
-    param["outencoding"] = enc
-  }
   opts.on('-c', '--check', 'Check if preprocess is needed.') {
     mode = :check
   }

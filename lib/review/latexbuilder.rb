@@ -2,7 +2,7 @@
 #
 # Copyright (c) 2002-2007 Minero Aoki
 #               2008-2009 Minero Aoki, Kenshi Muto
-#               2010  Minero Aoki, Kenshi Muto, TAKAHASHI Masayoshi
+#               2010-2016  Minero Aoki, Kenshi Muto, TAKAHASHI Masayoshi
 #
 # This program is free software.
 # You can distribute or modify this program under the terms of
@@ -25,7 +25,6 @@ module ReVIEW
       Compiler.definline(e)
     }
 
-    Compiler.defblock(:memo, 0..1)
     Compiler.defsingle(:latextsize, 1)
 
     def extname
@@ -39,6 +38,7 @@ module ReVIEW
       @table_caption = nil
       @ol_num = nil
       @sec_counter = SecCounter.new(5, @chapter)
+      initialize_metachars(@book.config["texcommand"])
     end
     private :builder_init_file
 
@@ -109,9 +109,28 @@ module ReVIEW
     def nonum_begin(level, label, caption)
       blank unless @output.pos == 0
       puts macro(HEADLINE[level]+"*", compile_inline(caption))
+      puts macro('addcontentsline', 'toc', HEADLINE[level], compile_inline(caption))
     end
 
     def nonum_end(level)
+    end
+
+    def notoc_begin(level, label, caption)
+      blank unless @output.pos == 0
+      puts macro(HEADLINE[level]+"*", compile_inline(caption))
+    end
+
+    def notoc_end(level)
+    end
+
+    def nodisp_begin(level, label, caption)
+      blank unless @output.pos == 0
+      puts macro('clearpage') if @output.pos == 0
+      puts macro('addcontentsline', 'toc', HEADLINE[level], compile_inline(caption))
+      # FIXME: headings
+    end
+
+    def nodisp_end(level)
     end
 
     def column_begin(level, label, caption)
@@ -139,14 +158,8 @@ module ReVIEW
         puts "\\reviewminicolumntitle{#{compile_inline(caption)}}\n"
       end
 
-      if @book.config["deprecated-blocklines"].nil?
-        blocked_lines = split_paragraph(lines)
-        puts blocked_lines.join("\n\n")
-      else
-        lines.each do |line|
-          puts line
-        end
-      end
+      blocked_lines = split_paragraph(lines)
+      puts blocked_lines.join("\n\n")
 
       puts "\\end{reviewminicolumn}\n"
     end
@@ -238,88 +251,130 @@ module ReVIEW
 
     alias_method :lead, :read
 
-    def emlist(lines, caption = nil)
+    def highlight_listings?
+      @book.config["highlight"] && @book.config["highlight"]["latex"] == "listings"
+    end
+    private :highlight_listings?
+
+    def emlist(lines, caption = nil, lang = nil)
       blank
+      if highlight_listings?
+        common_code_block_lst(nil, lines, 'reviewemlistlst', 'title', caption, lang)
+      else
+        common_code_block(nil, lines, 'reviewemlist', caption, lang) do |line, idx|
+          detab(line) + "\n"
+        end
+      end
+    end
+
+    def emlistnum(lines, caption = nil, lang = nil)
+      blank
+      if highlight_listings?
+        common_code_block_lst(nil, lines, 'reviewemlistnumlst', 'title', caption, lang)
+      else
+        common_code_block(nil, lines, 'reviewemlist', caption, lang) do |line, idx|
+          detab((idx+1).to_s.rjust(2)+": " + line) + "\n"
+        end
+      end
+    end
+
+    ## override Builder#list
+    def list(lines, id, caption, lang = nil)
+      if highlight_listings?
+        common_code_block_lst(id, lines, 'reviewlistlst', 'caption', caption, lang)
+      else
+        common_code_block(id, lines, 'reviewlist', caption, lang) do |line, idx|
+          detab(line) + "\n"
+        end
+      end
+    end
+
+    ## override Builder#listnum
+    def listnum(lines, id, caption, lang = nil)
+      if highlight_listings?
+        common_code_block_lst(id, lines, 'reviewlistnumlst', 'caption', caption, lang)
+      else
+        common_code_block(id, lines, 'reviewlist', caption, lang) do |line, idx|
+          detab((idx+1).to_s.rjust(2)+": " + line) + "\n"
+        end
+      end
+    end
+
+    def cmd(lines, caption = nil, lang = nil)
+      if highlight_listings?
+        common_code_block_lst(nil, lines, 'reviewcmdlst', 'title', caption, lang)
+      else
+        blank
+        common_code_block(nil, lines, 'reviewcmd', caption, lang) do |line, idx|
+          detab(line) + "\n"
+        end
+      end
+    end
+
+    def common_code_block(id, lines, command, caption, lang)
       if caption
-        puts macro('reviewemlistcaption', "#{compile_inline(caption)}")
+        if command =~ /emlist/ || command =~ /cmd/
+          puts macro(command + 'caption', "#{compile_inline(caption)}")
+        else
+          begin
+            puts macro('reviewlistcaption', "#{I18n.t("list")}#{I18n.t("format_number_header", [@chapter.number, @chapter.list(id).number])}#{I18n.t("caption_prefix")}#{compile_inline(caption)}")
+          rescue KeyError
+            error "no such list: #{id}"
+          end
+        end
       end
-      puts '\begin{reviewemlist}'
-      lines.each do |line|
-        puts detab(line)
+      body = ""
+      lines.each_with_index do |line, idx|
+        body.concat(yield(line, idx))
       end
-      puts '\end{reviewemlist}'
+      puts macro('begin' ,command)
+      print body
+      puts macro('end' ,command)
       blank
     end
 
-    def emlistnum(lines, caption = nil)
-      blank
-      if caption
-        puts macro('reviewemlistcaption', "#{compile_inline(caption)}")
+    def common_code_block_lst(id, lines, command, title, caption, lang)
+      caption_str = compile_inline((caption || ""))
+      if title == "title" && caption_str == ""
+        caption_str = "\\relax" ## dummy charactor to remove lstname
+        print "\\vspace{-1.5em}"
       end
-      puts '\begin{reviewemlist}'
-      lines.each_with_index do |line, i|
-        puts detab((i+1).to_s.rjust(2) + ": " + line)
+      if @book.config["highlight"] && @book.config["highlight"]["lang"]
+        lexer = @book.config["highlight"]["lang"] # default setting
+      else
+        lexer = ""
       end
-      puts '\end{reviewemlist}'
-      blank
-    end
-
-    def listnum_body(lines)
-      puts '\begin{reviewlist}'
-      lines.each_with_index do |line, i|
-        puts detab((i+1).to_s.rjust(2) + ": " + line)
-      end
-      puts '\end{reviewlist}'
-      blank
-
-    end
-
-    def cmd(lines, caption = nil)
-      blank
-      if caption
-        puts macro('reviewcmdcaption', "#{compile_inline(caption)}")
-      end
-      puts '\begin{reviewcmd}'
-      lines.each do |line|
-        puts detab(line)
-      end
-      puts '\end{reviewcmd}'
+      lexer = lang if lang.present?
+      body = lines.inject(''){|i, j| i + detab(unescape_latex(j)) + "\n"}
+      puts "\\begin{"+command+"}["+title+"={"+caption_str+"},language={"+ lexer+"}]"
+      print body
+      puts "\\end{"+ command + "}"
       blank
     end
 
-    def list_header(id, caption)
-      puts macro('reviewlistcaption', "#{I18n.t("list")}#{I18n.t("format_number_header", [@chapter.number, @chapter.list(id).number])}#{I18n.t("caption_prefix")}#{compile_inline(caption)}")
-    end
-
-    def list_body(id, lines)
-      puts '\begin{reviewlist}'
-      lines.each do |line|
-        puts detab(line)
-      end
-      puts '\end{reviewlist}'
-      puts ""
-    end
-
-    def source(lines, caption)
-      puts '\begin{reviewlist}'
-      source_header caption
-      source_body lines
-      puts '\end{reviewlist}'
-      puts ""
-    end
-
-    def source_header(caption)
-      puts macro('reviewlistcaption', compile_inline(caption))
-    end
-
-    def source_body(lines)
-      lines.each do |line|
-        puts detab(line)
+    def source(lines, caption, lang = nil)
+      if highlight_listings?
+        common_code_block_lst(nil, lines, 'reviewlistlst', 'title', caption, lang)
+      else
+        puts '\begin{reviewlist}'
+        puts macro('reviewlistcaption', compile_inline(caption))
+        lines.each do |line|
+          puts detab(line)
+        end
+        puts '\end{reviewlist}'
+        puts ""
       end
     end
 
 
     def image_header(id, caption)
+    end
+
+    def handle_metric(str)
+      if @book.config["image_scale2width"] && str =~ /\Ascale=([\d.]+)\Z/
+        return "width=#{$1}\\maxwidth"
+      end
+      str
     end
 
     def result_metric(array)
@@ -375,8 +430,9 @@ module ReVIEW
     end
     private :sec_label
 
-    def table_label(id)
-      "table:#{@chapter.id}:#{id}"
+    def table_label(id, chapter=nil)
+      chapter ||= @chapter
+      "table:#{chapter.id}:#{id}"
     end
     private :table_label
 
@@ -460,7 +516,7 @@ module ReVIEW
         puts macro('begin', 'reviewtable', @latex_tsize)
       elsif @tsize
         cellwidth = @tsize.split(/\s*,\s*/)
-        puts macro('begin', 'reviewtable', '|'+(cellwidth.collect{|i| "p{#{i}mm}"}.join('|'))+'|')
+        puts macro('begin', 'reviewtable', '|'+cellwidth.collect{|i| "p{#{i}mm}"}.join('|')+'|')
       else
         puts macro('begin', 'reviewtable', (['|'] * (ncols + 1)).join('l'))
       end
@@ -475,7 +531,7 @@ module ReVIEW
 
     def th(s)
       ## use shortstack for @<br>
-      if  /\\\\/i =~ s
+      if /\\\\/i =~ s
         macro('reviewth', macro('shortstack[l]', s))
       else
         macro('reviewth', s)
@@ -484,7 +540,7 @@ module ReVIEW
 
     def td(s)
       ## use shortstack for @<br>
-      if  /\\\\/ =~ s
+      if /\\\\/ =~ s
         macro('shortstack[l]', s)
       else
         s
@@ -503,6 +559,42 @@ module ReVIEW
       end
       @table_caption = nil
       blank
+    end
+
+    def imgtable(lines, id, caption = nil, metric = nil)
+      if !@chapter.image(id).bound?
+        warn "image not bound: #{id}"
+        image_dummy id, caption, lines
+        return
+      end
+
+      begin
+        if caption.present?
+          @table_caption = true
+          puts '\begin{table}[h]'
+          puts macro('reviewimgtablecaption', compile_inline(caption))
+        end
+        puts macro('label', table_label(id))
+      rescue ReVIEW::KeyError
+        error "no such table: #{id}"
+      end
+      imgtable_image(id, caption, metric)
+
+      puts '\end{table}' if @table_caption
+      @table_caption = nil
+      blank
+    end
+
+    def imgtable_image(id, caption, metric)
+      metrics = parse_metric("latex", metric)
+      # image is always bound here
+      puts '\begin{reviewimage}'
+      if metrics.present?
+        puts "\\includegraphics[#{metrics}]{#{@chapter.image(id).path}}"
+      else
+        puts "\\includegraphics[width=\\maxwidth]{#{@chapter.image(id).path}}"
+      end
+      puts '\end{reviewimage}'
     end
 
     def quote(lines)
@@ -532,14 +624,8 @@ module ReVIEW
     def latex_block(type, lines)
       blank
       puts macro('begin', type)
-      if @book.config["deprecated-blocklines"].nil?
-        blocked_lines = split_paragraph(lines)
-        puts blocked_lines.join("\n\n")
-      else
-        lines.each do |line|
-          puts line
-        end
-      end
+      blocked_lines = split_paragraph(lines)
+      puts blocked_lines.join("\n\n")
       puts macro('end', type)
       blank
     end
@@ -625,7 +711,7 @@ module ReVIEW
 
     def inline_table(id)
       chapter, id = extract_chapter_id(id)
-      macro('reviewtableref', "#{chapter.number}.#{chapter.table(id).number}", table_label(id))
+      macro('reviewtableref', "#{chapter.number}.#{chapter.table(id).number}", table_label(id, chapter))
     end
 
     def inline_img(id)
@@ -730,9 +816,9 @@ module ReVIEW
     def inline_hd_chap(chap, id)
       n = chap.headline_index.number(id)
       if chap.number and @book.config["secnolevel"] >= n.split('.').size
-        str = "「#{chap.headline_index.number(id)} #{compile_inline(chap.headline(id).caption)}」"
+        str = I18n.t("chapter_quote", "#{chap.headline_index.number(id)} #{compile_inline(chap.headline(id).caption)}")
       else
-        str = "「#{compile_inline(chap.headline(id).caption)}」"
+        str = I18n.t("chapter_quote", compile_inline(chap.headline(id).caption))
       end
       if @book.config["chapterlink"]
         anchor = n.gsub(/\./, "-")
@@ -742,8 +828,8 @@ module ReVIEW
       end
     end
 
-    def inline_column(id)
-      macro('reviewcolumnref', "#{@chapter.column(id).caption}", column_label(id))
+    def inline_column_chap(chapter, id)
+      macro('reviewcolumnref', "#{chapter.column(id).caption}", column_label(id))
     end
 
     def inline_raw(str)
@@ -767,7 +853,7 @@ module ReVIEW
     end
 
     def inline_u(str)
-      macro('Underline', escape(str))
+      macro('reviewunderline', escape(str))
     end
 
     def inline_ami(str)
@@ -789,6 +875,10 @@ module ReVIEW
       else
         ""
       end
+    end
+
+    def inline_tcy(str)
+      macro('rensuji', escape(str))
     end
 
     def bibpaper_header(id, caption)

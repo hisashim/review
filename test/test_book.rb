@@ -157,16 +157,14 @@ class BookTest < Test::Unit::TestCase
   # backword compatible
   def test_setParameter
     book = Book::Base.new(File.dirname(__FILE__))
-    book.param = :test
-    assert_equal :test, book.param  # old way
-    assert_equal :test, book.config # new way
+    book.config = :test
+    assert_equal :test, book.config
   end
 
   def test_setConfig
     book = Book::Base.new(File.dirname(__FILE__))
     book.config = :test
-    assert_equal :test, book.param  # old way
-    assert_equal :test, book.config # new way
+    assert_equal :test, book.config
   end
 
   def test_parse_chapters
@@ -179,7 +177,7 @@ class BookTest < Test::Unit::TestCase
       parts = book.instance_eval { parse_chapters }
       assert_equal 1, parts.size
 
-      assert_equal 1, parts[0].number
+      assert_equal nil, parts[0].number
       assert_equal 2, parts[0].chapters.size
       chaps = parts[0].chapters.map {|ch| [ch.number, ch.name, ch.path] }
       expect = [
@@ -203,7 +201,7 @@ EOC
       parts = book.instance_eval { parse_chapters }
       assert_equal 3, parts.size
 
-      assert_equal 1, parts[0].number
+      assert_equal nil, parts[0].number
       assert_equal 2, parts[0].chapters.size
       chaps = parts[0].chapters.map {|ch| [ch.number, ch.name, ch.path] }
       expect = [
@@ -212,7 +210,7 @@ EOC
       ]
       assert_equal expect, chaps
 
-      assert_equal 2, parts[1].number
+      assert_equal nil, parts[1].number
       assert_equal 3, parts[1].chapters.size
       chaps = parts[1].chapters.map {|ch| [ch.number, ch.name, ch.path] }
       expect = [
@@ -222,7 +220,7 @@ EOC
       ]
       assert_equal expect, chaps
 
-      assert_equal 3, parts[2].number
+      assert_equal nil, parts[2].number
       assert_equal 1, parts[2].chapters.size
       chaps = parts[2].chapters.map {|ch| [ch.number, ch.name, ch.path] }
       expect = [
@@ -248,7 +246,7 @@ EOC
         "part1\n",
         [
           "part1",
-          nil, # XXX: OK?
+          "", # XXX: OK?
           ""
         ],
       ],
@@ -257,7 +255,7 @@ EOC
         "part1_chapter1.re\n",
         "",
         [
-          nil, # XXX: OK?
+          "", # XXX: OK?
         ],
       ],
       [
@@ -391,7 +389,7 @@ EOC
     end
 
     mktmpbookdir 'catalog.yml' => "APPENDIX:\n  - p01.re",
-                 'p01.re' => '= appendix'  do |dir, book, files|
+                 'p01.re' => '= appendix' do |dir, book, files|
       assert_equal 'appendix', book.appendix.chapters.first.title
       assert_equal 1, book.appendix.chapters.first.number
     end
@@ -399,7 +397,7 @@ EOC
 
   def test_postscripts
     mktmpbookdir 'catalog.yml' => "POSTDEF:\n  - b01.re",
-                 'b01.re' => '= back'  do |dir, book, files|
+                 'b01.re' => '= back' do |dir, book, files|
       assert_kind_of Book::Part, book.postscripts
       assert_equal 1, book.postscripts.chapters.size
       assert_equal 'back', book.postscripts.chapters.first.title
@@ -418,12 +416,12 @@ EOC
       assert tmp.empty?
     end
 
-    mktmpbookdir 'CHAPS' => "ch1\nch2\n\nch3" do |dir, book, files|
+    mktmpbookdir 'CHAPS' => "ch1\nch2\n\nch3", 'PART' => "foo\nbar\n" do |dir, book, files|
       parts = book.parts
       assert_equal 2, parts.size
       assert !book.part(0)
-      assert book.part(1)
-      assert book.part(2)
+      assert_equal "foo", book.part(1).name
+      assert_equal "bar", book.part(2).name
       assert !book.part(3)
 
       tmp = []
@@ -508,9 +506,6 @@ EOC
     end
 
     mktmpbookdir 'preface.re' => '12345' do |dir, book, files|
-      assert_raises Errno::ENOENT do # XXX: OK?
-        book.volume
-      end
 
       Dir.chdir(dir) do
         book2 = Book::Base.new('.')

@@ -1,7 +1,7 @@
 # encoding: utf-8
 #
 # Copyright (c) 2002-2006 Minero Aoki
-#               2008-2010 Minero Aoki, Kenshi Muto
+#               2008-2016 Minero Aoki, Kenshi Muto
 #
 # This program is free software.
 # You can distribute or modify this program under the terms of
@@ -23,20 +23,16 @@ module ReVIEW
     Compiler.defsingle(:dtp, 1)
 
     Compiler.defblock(:insn, 1)
-    Compiler.defblock(:memo, 0..1)
-    Compiler.defblock(:tip, 0..1)
-    Compiler.defblock(:info, 0..1)
     Compiler.defblock(:planning, 0..1)
     Compiler.defblock(:best, 0..1)
-    Compiler.defblock(:important, 0..1)
     Compiler.defblock(:securty, 0..1)
-    Compiler.defblock(:caution, 0..1)
-    Compiler.defblock(:notice, 0..1)
     Compiler.defblock(:point, 0..1)
     Compiler.defblock(:reference, 0)
     Compiler.defblock(:term, 0)
     Compiler.defblock(:practice, 0)
     Compiler.defblock(:expert, 0)
+    Compiler.defblock(:link, 0..1)
+    Compiler.defblock(:shoot, 0..1)
 
     def pre_paragraph
       ''
@@ -72,6 +68,7 @@ module ReVIEW
         "term" => "用語解説",
         "notice" => "注意",
         "caution" => "警告",
+        "warning" => "危険",
         "point" => "ここがポイント",
         "reference" => "参考",
         "link" => "リンク",
@@ -242,7 +239,7 @@ module ReVIEW
 
     end
 
-    def list_header(id, caption)
+    def list_header(id, caption, lang)
       blank
       puts "◆→開始:#{@titles["list"]}←◆"
       if get_chap.nil?
@@ -253,7 +250,7 @@ module ReVIEW
       blank
     end
 
-    def list_body(id, lines)
+    def list_body(id, lines, lang)
       lines.each do |line|
         puts detab(line)
       end
@@ -279,11 +276,11 @@ module ReVIEW
       blank
     end
 
-    def emlist(lines, caption = nil)
+    def emlist(lines, caption = nil, lang = nil)
       base_block "emlist", lines, caption
     end
 
-    def emlistnum(lines, caption = nil)
+    def emlistnum(lines, caption = nil, lang = nil)
       blank
       puts "◆→開始:#{@titles["emlist"]}←◆"
       puts "■#{compile_inline(caption)}" unless caption.nil?
@@ -295,7 +292,7 @@ module ReVIEW
       blank
     end
 
-    def listnum_body(lines)
+    def listnum_body(lines, lang)
       lines.each_with_index do |line, i|
         puts (i + 1).to_s.rjust(2) + ": #{line}"
       end
@@ -506,8 +503,26 @@ module ReVIEW
       [str.to_i(16)].pack("U")
     end
 
+    def inline_comment(str)
+      if @book.config["draft"]
+        %Q[◆→DTP連絡:#{str}←◆]
+      else
+        ""
+      end
+    end
+
     def inline_m(str)
       %Q[◆→TeX式ここから←◆#{str}◆→TeX式ここまで←◆]
+    end
+
+    def inline_hd_chap(chap, id)
+      if chap.number
+        n = chap.headline_index.number(id)
+        if @book.config["secnolevel"] >= n.split('.').size
+          return I18n.t("chapter_quote", "#{n}　#{compile_inline(chap.headline(id).caption)}")
+        end
+      end
+      I18n.t("chapter_quote", compile_inline(chap.headline(id).caption))
     end
 
     def noindent
@@ -676,6 +691,10 @@ module ReVIEW
       base_block "insn", lines, caption
     end
 
+    def warning(lines, caption = nil)
+      base_parablock "warning", lines, caption
+    end
+
     alias_method :box, :insn
 
     def indepimage(id, caption=nil, metric=nil)
@@ -741,8 +760,7 @@ module ReVIEW
     def inline_chapref(id)
       chs = ["", "「", "」"]
       unless @book.config["chapref"].nil?
-        _chs = convert_inencoding(@book.config["chapref"],
-                                  @book.config["inencoding"]).split(",")
+        _chs = @book.config["chapref"].split(",")
         if _chs.size != 3
           error "--chapsplitter must have exactly 3 parameters with comma."
         else
@@ -756,7 +774,7 @@ module ReVIEW
       nofunc_text("[UnknownChapter:#{id}]")
     end
 
-    def source(lines, caption = nil)
+    def source(lines, caption = nil, lang = nil)
       base_block "source", lines, caption
     end
 
@@ -787,4 +805,4 @@ module ReVIEW
 
   end
 
-end   # module ReVIEW
+end # module ReVIEW

@@ -42,20 +42,18 @@ module ReVIEW
         return @title if @title
 
         @title = ''
-        open {|f|
-          f.each_line {|l|
-            l = convert_inencoding(l, book.config["inencoding"])
-            if l =~ /\A=+/
-              @title = l.sub(/\A=+(\[.+?\])?(\{.+?\})?/, '').strip
-              break
-            end
-          }
-        }
+        return @title if !content
+        content.each_line do |line|
+          if line =~ /\A=+/
+            @title = line.sub(/\A=+(\[.+?\])?(\{.+?\})?/, '').strip
+            break
+          end
+        end
         @title
       end
 
       def size
-        File.size(path())
+        content.size
       end
 
       def volume
@@ -66,17 +64,15 @@ module ReVIEW
         @volume
       end
 
+      # deprecated; use content()
       def open(&block)
         return (block_given?() ? yield(@io) : @io) if @io
-        File.open(path(), &block)
+        StringIO.new(content)
       end
 
       attr_writer :content
 
       def content
-        @content = convert_inencoding(File.read(path()),
-                                      book.config["inencoding"])
-      rescue
         @content
       end
 
@@ -113,9 +109,9 @@ module ReVIEW
       end
 
       def image(id)
-        return image_index()[id] if image_index().has_key?(id)
-        return icon_index()[id] if icon_index().has_key?(id)
-        return numberless_image_index()[id] if numberless_image_index().has_key?(id)
+        return image_index()[id] if image_index().key?(id)
+        return icon_index()[id] if icon_index().key?(id)
+        return numberless_image_index()[id] if numberless_image_index().key?(id)
         indepimage_index()[id]
       end
 

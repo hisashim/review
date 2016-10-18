@@ -2,7 +2,7 @@
 # $Id: book.rb 4315 2009-09-02 04:15:24Z kmuto $
 #
 # Copyright (c) 2002-2008 Minero Aoki
-#               2009 Minero Aoki, Kenshi Muto
+#               2009-2016 Minero Aoki, Kenshi Muto
 #
 # This program is free software.
 # You can distribute or modify this program under the terms of
@@ -15,12 +15,27 @@ module ReVIEW
     class Part
       include Compilable
 
-      def initialize(book, number, chapters, name="")
+      # if Part is dummy, `number` is nil.
+      #
+      def initialize(book, number, chapters, name = "", io = nil)
         @book = book
         @number = number
         @chapters = chapters
-        @path = name
         @name = name ? File.basename(name, '.re') : nil
+        @path = name
+        if io
+          @content = io.read
+        elsif @path && File.exist?(@path)
+          @content = File.read(@path, :mode => 'r:BOM|utf-8')
+        else
+          @content = nil
+        end
+        if file?
+          @title = nil
+        else
+          @title = name
+        end
+        @volume = nil
       end
 
       attr_reader :number
@@ -38,9 +53,20 @@ module ReVIEW
       end
 
       def file?
-        (name.present? and path =~ /\.re\z/) ? true : false
+        (name.present? and path.end_with?('.re')) ? true : false
       end
 
+      def format_number(heading = true)
+        if heading
+          "#{I18n.t("part", @number)}"
+        else
+          "#{@number}"
+        end
+      end
+
+      def on_APPENDIX?
+        false
+      end
     end
   end
 end

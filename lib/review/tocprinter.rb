@@ -12,54 +12,47 @@
 #
 
 require 'review/htmlutils'
-require 'review/htmllayout'
-require 'nkf'
+require 'review/tocparser'
 
 module ReVIEW
 
   class TOCPrinter
 
     def TOCPrinter.default_upper_level
-      99   # no one use 99 level nest
+      99 # no one use 99 level nest
     end
 
-    def initialize(print_upper, param)
+    def initialize(print_upper, param, out = $stdout)
       @print_upper = print_upper
       @config = param
+      @out = out
+    end
+
+    def print_book(book)
+      book.each_part do |part|
+        print_part(part)
+      end
+    end
+
+    def print_part(part)
+      part.each_chapter do |chap|
+        print_chapter(chap)
+      end
+    end
+
+    def print_chapter(chap)
+      chap_node = TOCParser.chapter_node(chap)
+      print_node 1, chap_node
+      print_children chap_node
     end
 
     def print?(level)
       level <= @print_upper
     end
-
-    def nkffilter(line)
-      inc = ""
-      outc = "-w"
-      if @config["inencoding"] =~ /^EUC$/
-        inc = "-E"
-      elsif @config["inencoding"] =~ /^SJIS$/
-        inc = "-S"
-      elsif @config["inencoding"]  =~ /^JIS$/
-        inc = "-J"
-      end
-
-      if @config["outencoding"] =~ /^EUC$/
-        outc = "-e"
-      elsif @config["outencoding"] =~ /^SJIS$/
-        outc = "-s"
-      elsif @config["outencoding"]  =~ /^JIS$/
-        outc = "-j"
-      end
-
-      NKF.nkf("#{inc} #{outc}", line)
-    end
   end
 
 
   class TextTOCPrinter < TOCPrinter
-    def print_book(book)
-      print_children book
-    end
 
     private
 
@@ -76,14 +69,14 @@ module ReVIEW
     def print_node(number, node)
       if node.chapter?
         vol = node.volume
-        printf "%3s %3dKB %6dC %5dL  %s (%s)\n",
+        @out.printf "%3s %3dKB %6dC %5dL  %s (%s)\n",
                chapnumstr(node.number),
                vol.kbytes, vol.chars, vol.lines,
-               nkffilter(node.label), node.chapter_id
-      else
-        printf "%17s %5dL  %s\n",
+               node.label, node.chapter_id
+      else ## for section node
+        @out.printf "%17s %5dL  %s\n",
                '', node.estimated_lines,
-               nkffilter("  #{'   ' * (node.level - 1)}#{number} #{node.label}")
+               "  #{'   ' * (node.level - 1)}#{number} #{node.label}"
       end
     end
 
@@ -94,7 +87,7 @@ module ReVIEW
     def volume_columns(level, volstr)
       cols = ["", "", "", nil]
       cols[level - 1] = volstr
-      cols[0, 3]   # does not display volume of level-4 section
+      cols[0, 3] # does not display volume of level-4 section
     end
 
   end
@@ -105,38 +98,42 @@ module ReVIEW
     include HTMLUtils
 
     def print_book(book)
-      return unless print?(1)
-      html = ""
+      @out.puts '<ul class="book-toc">'
       book.each_part do |part|
-        html << h1(part.name) if part.name
-        part.each_section do |chap|
-          if chap.number
-            name = "chap#{chap.number}"
-            label = "第#{chap.number}章 #{chap.label}"
-            html << h2(a_name(escape_html(name), escape_html(label)))
-          else
-            label = "#{chap.label}"
-            html << h2(escape_html(label))
-          end
-          return unless print?(2)
-          if print?(3)
-            html << chap_sections_to_s(chap)
-          else
-            html << chapter_to_s(chap)
-          end
-        end
+        print_part(part)
       end
-      layout_file = File.join(book.basedir, "layouts", "layout.html.erb")
-      unless File.exist?(layout_file) # backward compatibility
-        layout_file = File.join(book.basedir, "layouts", "layout.erb")
+      @out.puts '</ul>'
+    end
+
+    def print_part(part)
+      if part.number
+        @out.puts li(part.title)
       end
-      puts HTMLLayout.new(
-        {'body' => html, 'title' => "目次"}, layout_file).result
+      super
+    end
+
+    def print_chapter(chap)
+      chap_node = TOCParser.chapter_node(chap)
+      ext = chap.book.config["htmlext"] || "html"
+      path = chap.path.sub(/\.re/, "."+ext)
+      if chap_node.number && chap.on_CHAPS?
+        label = "#{chap.number} #{chap.title}"
+      else
+        label = chap.title
+      end
+      @out.puts li(a_name(path, escape_html(label)))
+      return unless print?(2)
+      if print?(3)
+        @out.puts chap_sections_to_s(chap_node)
+      else
+        @out.puts chapter_to_s(chap_node)
+      end
     end
 
     private
 
     def chap_sections_to_s(chap)
+      return "" if chap.section_size < 1
       res = []
       res << "<ol>"
       chap.each_section do |sec|
@@ -146,31 +143,20 @@ module ReVIEW
       return res.join("\n")
     end
 
-    def print_chapter_to_s(chap)
+    def chapter_to_s(chap)
       res = []
       chap.each_section do |sec|
-        res << h3(escape_html(sec.label))
+        res << li(escape_html(sec.label))
         next unless print?(4)
-        next if sec.n_sections == 0
-        res << "<ul>"
-        sec.each_section do |node|
-          res << li(escape_html(node.label))
+        if sec.section_size > 0
+          res << "<ul>"
+          sec.each_section do |node|
+            res << li(escape_html(node.label))
+          end
+          res << "</ul>"
         end
-        res << "</ul>"
       end
       return res.join("\n")
-    end
-
-    def h1(label)
-      "<h1>#{label}</h1>"
-    end
-
-    def h2(label)
-      "<h2>#{label}</h2>"
-    end
-
-    def h3(label)
-      "<h3>#{label}</h3>"
     end
 
     def li(content)
@@ -183,46 +169,4 @@ module ReVIEW
 
   end
 
-  class IDGTOCPrinter < TOCPrinter
-    def print_book(book)
-      puts %Q(<?xml version="1.0" encoding="UTF-8"?>)
-      puts nkffilter(%Q(<doc xmlns:aid='http://ns.adobe.com/AdobeInDesign/4.0/'><title aid:pstyle="h0">1　パート1</title><?dtp level="0" section="第1部　パート1"?>)) # FIXME: 部タイトルを取るには？ & 部ごとに結果を分けるには？
-      puts %Q(<ul aid:pstyle='ul-partblock'>)
-      print_children book
-      puts %Q(</ul></doc>)
-    end
-
-    private
-
-    def print_children(node)
-      return unless print?(node.level + 1)
-      node.each_section_with_index do |sec, idx|
-        print_node idx+1, sec
-        print_children sec
-      end
-    end
-
-    LABEL_LEN = 54
-
-    def print_node(seq, node)
-      if node.chapter?
-        vol = node.volume
-        printf "<li aid:pstyle='ul-part'>%s</li>\n",
-               nkffilter("#{chapnumstr(node.number)}#{node.label}")
-      else
-        printf "<li>%-#{LABEL_LEN}s\n",
-               nkffilter("  #{'   ' * (node.level - 1)}#{seq}　#{node.label}</li>")
-      end
-    end
-
-    def chapnumstr(n)
-      n ? nkffilter(sprintf('第%d章　', n)) : ''
-    end
-
-    def volume_columns(level, volstr)
-      cols = ["", "", "", nil]
-      cols[level - 1] = volstr
-      cols[0, 3]
-    end
-  end
 end

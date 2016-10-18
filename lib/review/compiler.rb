@@ -1,7 +1,7 @@
 # encoding: utf-8
 #
 # Copyright (c) 2002-2007 Minero Aoki
-# Copyright (c) 2009-2010 Minero Aoki, Kenshi Muto
+# Copyright (c) 2009-2016 Minero Aoki, Kenshi Muto
 #
 # This program is free software.
 # You can distribute or modify this program under the terms of
@@ -11,7 +11,7 @@
 require 'review/extentions'
 require 'review/preprocessor'
 require 'review/exception'
-require 'lineinput'
+require 'strscan'
 
 module ReVIEW
 
@@ -130,15 +130,16 @@ module ReVIEW
 
     defblock :read, 0
     defblock :lead, 0
-    defblock :list, 2
-    defblock :emlist, 0..1
+    defblock :list, 2..3
+    defblock :emlist, 0..2
     defblock :cmd, 0..1
     defblock :table, 0..2
+    defblock :imgtable, 0..2
     defblock :quote, 0
     defblock :image, 2..3, true
-    defblock :source, 0..1
-    defblock :listnum, 2
-    defblock :emlistnum, 0..1
+    defblock :source, 0..2
+    defblock :listnum, 2..3
+    defblock :emlistnum, 0..2
     defblock :bibpaper, 2..3, true
     defblock :doorquote, 1
     defblock :talk, 0
@@ -151,6 +152,13 @@ module ReVIEW
     defblock :flushright, 0
     defblock :centering, 0
     defblock :note, 0..1
+    defblock :memo, 0..1
+    defblock :info, 0..1
+    defblock :important, 0..1
+    defblock :caution, 0..1
+    defblock :notice, 0..1
+    defblock :warning, 0..1
+    defblock :tip, 0..1
     defblock :box, 0..1
     defblock :comment, 0..1, true
 
@@ -172,6 +180,7 @@ module ReVIEW
     definline :chap
     definline :title
     definline :img
+    definline :imgref
     definline :icon
     definline :list
     definline :table
@@ -188,6 +197,7 @@ module ReVIEW
     definline :href
     definline :recipe
     definline :column
+    definline :tcy
 
     definline :abbr
     definline :acronym
@@ -218,6 +228,7 @@ module ReVIEW
     definline :hidx
     definline :comment
     definline :include
+    definline :tcy
 
     private
 
@@ -294,10 +305,6 @@ module ReVIEW
         @headline_indexs[index] = 0 if @headline_indexs[index].nil?
         @headline_indexs[index] += 1
         close_current_tagged_section(level)
-        if @chapter.book.config["hdnumberingmode"]
-          caption = @chapter.on_CHAPS? ? "#{@headline_indexs.join('.')} #{caption}" : caption
-          warn "--hdnumberingmode is deprecated. use --level option."
-        end
         @strategy.headline level, label, caption
       end
     end
@@ -361,7 +368,7 @@ module ReVIEW
         elsif level < current_level # down
           level_diff = current_level - level
           level = current_level
-          (1..(level_diff - 1)).to_a.reverse.each do |i|
+          (1..(level_diff - 1)).to_a.reverse_each do |i|
             @strategy.ul_begin {i}
             @strategy.ul_item_begin []
           end
@@ -370,7 +377,7 @@ module ReVIEW
         elsif level > current_level # up
           level_diff = level - current_level
           level = current_level
-          (1..level_diff).to_a.reverse.each do |i|
+          (1..level_diff).to_a.reverse_each do |i|
             @strategy.ul_item_end
             @strategy.ul_end {level + i}
           end
@@ -380,7 +387,7 @@ module ReVIEW
         end
       end
 
-      (1..level).to_a.reverse.each do |i|
+      (1..level).to_a.reverse_each do |i|
         @strategy.ul_item_end
         @strategy.ul_end {i}
       end
@@ -407,6 +414,7 @@ module ReVIEW
         @strategy.dt text(f.gets.sub(/\A\s*:/, '').strip)
         @strategy.dd f.break(/\A(\S|\s*:)/).map {|line| text(line.strip) }
         f.skip_blank_lines
+        f.skip_comment_lines
       end
       @strategy.dl_end
     end
@@ -422,7 +430,7 @@ module ReVIEW
 
     def read_command(f)
       line = f.gets
-      name = line.slice(/[a-z]+/).intern
+      name = line.slice(/[a-z]+/).to_sym
       args = parse_args(line.sub(%r<\A//[a-z]+>, '').rstrip.chomp('{'), name)
       lines = block_open?(line) ? read_block(f) : nil
       return name, args, lines
@@ -444,7 +452,7 @@ module ReVIEW
         error "unexpected EOF (block begins at: #{head})"
         return buf
       end
-      f.gets   # discard terminator
+      f.gets # discard terminator
       buf
     end
 
@@ -522,7 +530,7 @@ module ReVIEW
     rescue => err
       error err.message
     end
-    public :text   # called from strategy
+    public :text # called from strategy
 
     def compile_inline(str)
       op, arg = /\A@<(\w+)>\{(.*?)\}\z/.match(str).captures
@@ -548,4 +556,4 @@ module ReVIEW
 
   end
 
-end   # module ReVIEW
+end # module ReVIEW

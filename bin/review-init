@@ -20,11 +20,20 @@ require 'review/version'
 def main
   opts = OptionParser.new
   opts.version = ReVIEW::VERSION
-  opts.banner = "Usage: #{File.basename($0)} dirname"
-  opts.on('-h', '--help', 'print this message and quit.') {
+  opts.banner = "Usage: #{File.basename($0)} [option] dirname"
+  opts.on('-h', '--help', 'print this message and quit.') do
     puts opts.help
     exit 0
-  }
+  end
+  opts.on('-f', '--force', 'generate files (except *.re) if directory has already existed.') do
+    @force = true
+  end
+  opts.on('-l', '--locale', 'generate locale.yml file.') do
+    @locale = true
+  end
+  opts.on('', '--epub-version VERSION', 'define EPUB version') do |version|
+    @epub_version = version
+  end
   begin
     opts.parse!
   rescue OptionParser::ParseError => err
@@ -50,12 +59,14 @@ def main
     generate_style(dir)
     generate_texmacro(dir)
     generate_config(dir)
+    generate_locale(dir) if @locale
     generate_rakefile(dir)
+    generate_gemfile(dir)
   end
 end
 
 def generate_dir(dir)
-  if File.exist? dir
+  if File.exist?(dir) && !@force
     puts "#{dir} already exists."
     exit
   end
@@ -64,31 +75,15 @@ def generate_dir(dir)
 end
 
 def generate_sample(dir)
-  File.open("#{dir}/#{File.basename(dir)}.re", "w") do |file|
-    file.write("= ")
+  if !@force
+    File.open("#{dir}/#{File.basename(dir)}.re", "w") do |file|
+      file.write("= ")
+    end
   end
 end
 
 def generate_layout(dir)
-  Dir.mkdir dir + '/layouts'
-  File.open("#{dir}/layouts/layout.html.erb", "w") do |file|
-    file.write <<-EOS
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.1//EN" "http://www.w3.org/TR/xhtml11/DTD/xhtml11.dtd">
-<html xmlns="http://www.w3.org/1999/xhtml" xmlns:ops="http://www.idpf.org/2007/ops" xml:lang="ja">
-<head>
-  <meta http-equiv="Content-Type" content="text/html;charset=UTF-8" />
-  <meta http-equiv="Content-Style-Type" content="text/css" />
-  <link rel="stylesheet" type="text/css" href="style.css" />
-  <meta name="generator" content="Re:VIEW" />
-  <title><%= title %></title>
-</head>
-<body>
-<%= body %>
-</body>
-</html>
-EOS
-  end
+  FileUtils.mkdir_p dir + '/layouts'
 end
 
 def generate_catalog_file(dir)
@@ -108,7 +103,7 @@ EOS
 end
 
 def generate_images_dir(dir)
-  Dir.mkdir dir + '/images'
+  FileUtils.mkdir_p dir + '/images'
 end
 
 def generate_cover_image(dir)
@@ -116,7 +111,18 @@ def generate_cover_image(dir)
 end
 
 def generate_config(dir)
-  FileUtils.cp @review_dir + "/test/sample-book/src/config.yml", dir
+  today = Time.now.strftime("%Y-%m-%d")
+  content = File.read(@review_dir + "/doc/config.yml.sample")
+  content.gsub!(/^#\s*coverimage:.*$/, 'coverimage: cover.jpg')
+  content.gsub!(/^#\s*date:.*$/, "date: #{today}")
+  content.gsub!(/^#\s*history:.*$/, %Q|history: [["#{today}"]]|)
+  content.gsub!(/^#\s*texstyle:.*$/, "texstyle: reviewmacro")
+  content.gsub!(/^(#\s*)?stylesheet:.*$/, %Q|stylesheet: ["style.css"]|)
+  if @epub_version.to_i == 2
+    content.gsub!(/^#.*epubversion:.*$/,'epubversion: 2')
+    content.gsub!(/^#.*htmlversion:.*$/,'htmlversion: 4')
+  end
+  File.open(File.join(dir, "config.yml"), "w"){|f| f.write(content) }
 end
 
 def generate_style(dir)
@@ -125,12 +131,27 @@ end
 
 def generate_texmacro(dir)
   texmacrodir = dir + '/sty'
-  Dir.mkdir texmacrodir
+  FileUtils.mkdir_p texmacrodir
   FileUtils.cp @review_dir + "/test/sample-book/src/sty/reviewmacro.sty", texmacrodir
 end
 
 def generate_rakefile(dir)
   FileUtils.cp @review_dir + "/test/sample-book/src/Rakefile", dir
+end
+
+def generate_locale(dir)
+  FileUtils.cp @review_dir + '/lib/review/i18n.yml', dir + '/locale.yml'
+end
+
+def generate_gemfile(dir)
+  File.open(dir + "/Gemfile", "w") do |file|
+    file.write <<-EOS
+source 'https://rubygems.org'
+
+gem 'rake'
+gem 'review', '#{ReVIEW::VERSION}'
+EOS
+  end
 end
 
 if File.basename($0) == File.basename(__FILE__)

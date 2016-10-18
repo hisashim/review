@@ -12,11 +12,11 @@ class LATEXBuidlerTest < Test::Unit::TestCase
     @builder = LATEXBuilder.new()
     @config = ReVIEW::Configure.values
     @config.merge!( {
-      "secnolevel" => 2,    # for IDGXMLBuilder, EPUBBuilder
+      "secnolevel" => 2, # for IDGXMLBuilder, EPUBBuilder
       "toclevel" => 2,
-      "inencoding" => "UTF-8",
-      "outencoding" => "UTF-8",
-      "stylesheet" => nil,  # for EPUBBuilder
+      "stylesheet" => nil, # for EPUBBuilder
+      "image_scale2width" => false,
+      "texcommand" => "uplatex"
     })
     @book = Book::Base.new(nil)
     @book.config = @config
@@ -24,6 +24,7 @@ class LATEXBuidlerTest < Test::Unit::TestCase
     @chapter = Book::Chapter.new(@book, 1, 'chap1', nil, StringIO.new)
     location = Location.new(nil, nil)
     @builder.bind(@compiler, @chapter, location)
+    I18n.setup("ja")
   end
 
   def test_headline_level1
@@ -160,7 +161,7 @@ class LATEXBuidlerTest < Test::Unit::TestCase
 
   def test_inline_u
     actual = compile_inline("abc@<u>{def}ghi")
-    assert_equal %Q|abc\\Underline{def}ghi|, actual
+    assert_equal %Q|abc\\reviewunderline{def}ghi|, actual
   end
 
   def test_inline_m
@@ -215,8 +216,10 @@ class LATEXBuidlerTest < Test::Unit::TestCase
   end
 
   def test_jis_x_0201_kana
+    # uplatex can handle half-width kana natively
     actual = compile_inline("foo･ｶﾝｼﾞ､テスト")
-    assert_equal %Q|foo\\aj半角{・}\\aj半角{カ}\\aj半角{ン}\\aj半角{シ}\\aj半角{゛}\\aj半角{、}テスト|, actual
+    assert_equal %Q|foo･ｶﾝｼﾞ､テスト|, actual
+    # assert_equal %Q|foo\\aj半角{・}\\aj半角{カ}\\aj半角{ン}\\aj半角{シ}\\aj半角{゛}\\aj半角{、}テスト|, actual
   end
 
   def test_dlist
@@ -239,10 +242,33 @@ class LATEXBuidlerTest < Test::Unit::TestCase
     assert_equal %Q|\n\\reviewcmdcaption{cap1}\n\\begin{reviewcmd}\nfoo\nbar\n\nbuz\n\\end{reviewcmd}\n|, actual
   end
 
+  def test_cmd_lst
+    @book.config["highlight"] = {}
+    @book.config["highlight"]["latex"] = "listings"
+    actual = compile_block("//cmd{\nfoo\nbar\n\nbuz\n//}\n")
+    assert_equal %Q|\\vspace{-1.5em}\\begin{reviewcmdlst}[title={\\relax},language={}]\nfoo\nbar\n\nbuz\n\\end{reviewcmdlst}\n|, actual
+  end
+
   def test_emlist
     actual = compile_block("//emlist{\nfoo\nbar\n\nbuz\n//}\n")
     assert_equal %Q|\n\\begin{reviewemlist}\nfoo\nbar\n\nbuz\n\\end{reviewemlist}\n|, actual
   end
+
+  def test_emlist_lst
+    @book.config["highlight"] = {}
+    @book.config["highlight"]["latex"] = "listings"
+    actual = compile_block("//emlist[][sql]{\nSELECT COUNT(*) FROM tests WHERE tests.no > 10 AND test.name LIKE 'ABC%'\n//}\n")
+    assert_equal %Q|\n\\vspace{-1.5em}\\begin{reviewemlistlst}[title={\\relax},language={sql}]\nSELECT COUNT(*) FROM tests WHERE tests.no > 10 AND test.name LIKE 'ABC%'\n\\end{reviewemlistlst}\n|, actual
+  end
+
+  def test_emlist_lst_without_lang
+    @book.config["highlight"] = {}
+    @book.config["highlight"]["latex"] = "listings"
+    @book.config["highlight"]["lang"] = "sql"
+    actual = compile_block("//emlist[]{\nSELECT COUNT(*) FROM tests WHERE tests.no > 10 AND test.name LIKE 'ABC%'\n//}\n")
+    assert_equal %Q|\n\\vspace{-1.5em}\\begin{reviewemlistlst}[title={\\relax},language={sql}]\nSELECT COUNT(*) FROM tests WHERE tests.no > 10 AND test.name LIKE 'ABC%'\n\\end{reviewemlistlst}\n|, actual
+  end
+
 
   def test_emlist_caption
     actual = compile_block("//emlist[cap1]{\nfoo\nbar\n\nbuz\n//}\n")
@@ -258,6 +284,43 @@ class LATEXBuidlerTest < Test::Unit::TestCase
     @config["tabwidth"] = 4
     actual = compile_block("//emlist{\n\tfoo\n\t\tbar\n\n\tbuz\n//}\n")
     assert_equal %Q|\n\\begin{reviewemlist}\n    foo\n        bar\n\n    buz\n\\end{reviewemlist}\n|, actual
+  end
+
+  def test_emlistnum_caption
+    actual = compile_block("//emlistnum[cap1]{\nfoo\nbar\n\nbuz\n//}\n")
+    assert_equal %Q|\n\\reviewemlistcaption{cap1}\n\\begin{reviewemlist}\n 1: foo\n 2: bar\n 3: \n 4: buz\n\\end{reviewemlist}\n|, actual
+  end
+
+  def test_list
+    actual = compile_block("//list[id1][cap1]{\nfoo\nbar\n\nbuz\n//}\n")
+    assert_equal %Q|\\reviewlistcaption{リスト1.1: cap1}\n\\begin{reviewlist}\nfoo\nbar\n\nbuz\n\\end{reviewlist}\n|, actual
+  end
+
+  def test_list_lst
+    @book.config["highlight"] = {}
+    @book.config["highlight"]["latex"] = "listings"
+    actual = compile_block("//list[id1][cap1][sql]{\nSELECT COUNT(*) FROM tests WHERE tests.no > 10 AND test.name LIKE 'ABC%'\n//}\n")
+    assert_equal %Q|\\begin{reviewlistlst}[caption={cap1},language={sql}]\nSELECT COUNT(*) FROM tests WHERE tests.no > 10 AND test.name LIKE 'ABC%'\n\\end{reviewlistlst}\n|, actual
+  end
+
+  def test_list_lst_with_lang
+    @book.config["highlight"] = {}
+    @book.config["highlight"]["latex"] = "listings"
+    @book.config["highlight"]["lang"] = "sql"
+    actual = compile_block("//list[id1][cap1]{\nSELECT COUNT(*) FROM tests WHERE tests.no > 10 AND test.name LIKE 'ABC%'\n//}\n")
+    assert_equal %Q|\\begin{reviewlistlst}[caption={cap1},language={sql}]\nSELECT COUNT(*) FROM tests WHERE tests.no > 10 AND test.name LIKE 'ABC%'\n\\end{reviewlistlst}\n|, actual
+  end
+
+  def test_listnum
+    actual = compile_block("//listnum[test1][ruby]{\nclass Foo\n  def foo\n    bar\n\n    buz\n  end\nend\n//}\n")
+    assert_equal %Q|\\reviewlistcaption{リスト1.1: ruby}\n\\begin{reviewlist}\n 1: class Foo\n 2:   def foo\n 3:     bar\n 4: \n 5:     buz\n 6:   end\n 7: end\n\\end{reviewlist}\n|, actual
+  end
+
+  def test_listnum_lst
+    @book.config["highlight"] = {}
+    @book.config["highlight"]["latex"] = "listings"
+    actual = compile_block("//listnum[test1][ruby]{\nclass Foo\n  def foo\n    bar\n\n    buz\n  end\nend\n//}\n")
+    assert_equal %Q|\\begin{reviewlistnumlst}[caption={ruby},language={}]\nclass Foo\n  def foo\n    bar\n\n    buz\n  end\nend\n\\end{reviewlistnumlst}\n|, actual
   end
 
   def test_quote
@@ -307,6 +370,18 @@ class LATEXBuidlerTest < Test::Unit::TestCase
     assert_equal %Q|\\begin{reviewimage}\n\\includegraphics[scale=1.2]{./images/chap1-sampleimg.png}\n\\caption{sample photo}\n\\label{image:chap1:sampleimg}\n\\end{reviewimage}\n|, actual
   end
 
+  def test_image_with_metric_width
+    def @chapter.image(id)
+      item = Book::ImageIndex::Item.new("sampleimg",1)
+      item.instance_eval{@path="./images/chap1-sampleimg.png"}
+      item
+    end
+
+    @config["image_scale2width"] = true
+    actual = compile_block("//image[sampleimg][sample photo][scale=1.2]{\n//}\n")
+    assert_equal %Q|\\begin{reviewimage}\n\\includegraphics[width=1.2\\maxwidth]{./images/chap1-sampleimg.png}\n\\caption{sample photo}\n\\label{image:chap1:sampleimg}\n\\end{reviewimage}\n|, actual
+  end
+
   def test_image_with_metric2
     def @chapter.image(id)
       item = Book::ImageIndex::Item.new("sampleimg",1)
@@ -316,6 +391,18 @@ class LATEXBuidlerTest < Test::Unit::TestCase
 
     actual = compile_block("//image[sampleimg][sample photo][scale=1.2,html::class=sample,latex::ignore=params]{\n//}\n")
     assert_equal %Q|\\begin{reviewimage}\n\\includegraphics[scale=1.2,ignore=params]{./images/chap1-sampleimg.png}\n\\caption{sample photo}\n\\label{image:chap1:sampleimg}\n\\end{reviewimage}\n|, actual
+  end
+
+  def test_image_with_metric2_width
+    def @chapter.image(id)
+      item = Book::ImageIndex::Item.new("sampleimg",1)
+      item.instance_eval{@path="./images/chap1-sampleimg.png"}
+      item
+    end
+
+    @config["image_scale2width"] = true
+    actual = compile_block("//image[sampleimg][sample photo][scale=1.2,html::class=sample,latex::ignore=params]{\n//}\n")
+    assert_equal %Q|\\begin{reviewimage}\n\\includegraphics[width=1.2\\maxwidth,ignore=params]{./images/chap1-sampleimg.png}\n\\caption{sample photo}\n\\label{image:chap1:sampleimg}\n\\end{reviewimage}\n|, actual
   end
 
   def test_indepimage
@@ -352,6 +439,18 @@ class LATEXBuidlerTest < Test::Unit::TestCase
     assert_equal %Q|\\begin{reviewimage}\n\\includegraphics[scale=1.2]{./images/chap1-sampleimg.png}\n\\reviewindepimagecaption{図: sample photo}\n\\end{reviewimage}\n|, actual
   end
 
+  def test_indepimage_with_metric_width
+    def @chapter.image(id)
+      item = Book::ImageIndex::Item.new("sampleimg",1)
+      item.instance_eval{@path="./images/chap1-sampleimg.png"}
+      item
+    end
+
+    @config["image_scale2width"] = true
+    actual = compile_block("//indepimage[sampleimg][sample photo][scale=1.2]\n")
+    assert_equal %Q|\\begin{reviewimage}\n\\includegraphics[width=1.2\\maxwidth]{./images/chap1-sampleimg.png}\n\\reviewindepimagecaption{図: sample photo}\n\\end{reviewimage}\n|, actual
+  end
+
   def test_indepimage_with_metric2
     def @chapter.image(id)
       item = Book::ImageIndex::Item.new("sampleimg",1)
@@ -373,6 +472,31 @@ class LATEXBuidlerTest < Test::Unit::TestCase
     # FIXME: indepimage's caption should not be with a counter.
     actual = compile_block("//indepimage[sampleimg][][scale=1.2]\n")
     assert_equal %Q|\\begin{reviewimage}\n\\includegraphics[scale=1.2]{./images/chap1-sampleimg.png}\n\\end{reviewimage}\n|, actual
+  end
+
+  def test_table
+    actual = compile_block("//table{\naaa\tbbb\n------------\nccc\tddd<>&\n//}\n")
+    assert_equal "\\begin{reviewtable}{|l|l|}\n\\hline\n\\reviewth{aaa} & \\reviewth{bbb} \\\\  \\hline\nccc & ddd\\textless{}\\textgreater{}\\& \\\\  \\hline\n\\end{reviewtable}\n",
+                 actual
+  end
+
+  def test_imgtable
+    def @chapter.image(id)
+      item = Book::ImageIndex::Item.new("sampleimg",1, 'sample img')
+      item.instance_eval{@path="./images/chap1-sampleimg.png"}
+      item
+    end
+
+    actual = compile_block("//imgtable[sampleimg][test for imgtable]{\n//}\n")
+
+    assert_equal "\\begin{table}[h]\n"+
+                 "\\reviewimgtablecaption{test for imgtable}\n"+
+                 "\\label{table:chap1:sampleimg}\n"+
+                 "\\begin{reviewimage}\n"+
+                 "\\includegraphics[width=\\maxwidth]{./images/chap1-sampleimg.png}\n"+
+                 "\\end{reviewimage}\n"+
+                 "\\end{table}\n",
+                 actual
   end
 
   def test_bib
@@ -613,6 +737,40 @@ EOS
     assert_equal expected, actual
   end
 
+  def test_major_blocks
+    actual = compile_block("//note{\nA\n\nB\n//}\n//note[caption]{\nA\n//}")
+    expected = %Q(\\begin{reviewminicolumn}\nA\n\nB\n\\end{reviewminicolumn}\n\\begin{reviewminicolumn}\n\\reviewminicolumntitle{caption}\nA\n\\end{reviewminicolumn}\n)
+    assert_equal expected, actual
+
+    actual = compile_block("//memo{\nA\n\nB\n//}\n//memo[caption]{\nA\n//}")
+    expected = %Q(\\begin{reviewminicolumn}\nA\n\nB\n\\end{reviewminicolumn}\n\\begin{reviewminicolumn}\n\\reviewminicolumntitle{caption}\nA\n\\end{reviewminicolumn}\n)
+    assert_equal expected, actual
+
+    actual = compile_block("//info{\nA\n\nB\n//}\n//info[caption]{\nA\n//}")
+    expected = %Q(\\begin{reviewminicolumn}\nA\n\nB\n\\end{reviewminicolumn}\n\\begin{reviewminicolumn}\n\\reviewminicolumntitle{caption}\nA\n\\end{reviewminicolumn}\n)
+    assert_equal expected, actual
+
+    actual = compile_block("//important{\nA\n\nB\n//}\n//important[caption]{\nA\n//}")
+    expected = %Q(\\begin{reviewminicolumn}\nA\n\nB\n\\end{reviewminicolumn}\n\\begin{reviewminicolumn}\n\\reviewminicolumntitle{caption}\nA\n\\end{reviewminicolumn}\n)
+    assert_equal expected, actual
+
+    actual = compile_block("//caution{\nA\n\nB\n//}\n//caution[caption]{\nA\n//}")
+    expected = %Q(\\begin{reviewminicolumn}\nA\n\nB\n\\end{reviewminicolumn}\n\\begin{reviewminicolumn}\n\\reviewminicolumntitle{caption}\nA\n\\end{reviewminicolumn}\n)
+    assert_equal expected, actual
+
+    actual = compile_block("//notice{\nA\n\nB\n//}\n//notice[caption]{\nA\n//}")
+    expected = %Q(\\begin{reviewminicolumn}\nA\n\nB\n\\end{reviewminicolumn}\n\\begin{reviewminicolumn}\n\\reviewminicolumntitle{caption}\nA\n\\end{reviewminicolumn}\n)
+    assert_equal expected, actual
+
+    actual = compile_block("//warning{\nA\n\nB\n//}\n//warning[caption]{\nA\n//}")
+    expected = %Q(\\begin{reviewminicolumn}\nA\n\nB\n\\end{reviewminicolumn}\n\\begin{reviewminicolumn}\n\\reviewminicolumntitle{caption}\nA\n\\end{reviewminicolumn}\n)
+    assert_equal expected, actual
+
+    actual = compile_block("//tip{\nA\n\nB\n//}\n//tip[caption]{\nA\n//}")
+    expected = %Q(\\begin{reviewminicolumn}\nA\n\nB\n\\end{reviewminicolumn}\n\\begin{reviewminicolumn}\n\\reviewminicolumntitle{caption}\nA\n\\end{reviewminicolumn}\n)
+    assert_equal expected, actual
+  end
+
   def test_inline_raw0
     assert_equal "normal", compile_inline("@<raw>{normal}")
   end
@@ -640,6 +798,30 @@ EOS
   def test_inline_endash
     actual = compile_inline("- -- --- ----")
     assert_equal "{-} {-}{-} {-}{-}{-} {-}{-}{-}{-}", actual
+  end
+
+  def test_inline_imgref
+    def @chapter.image(id)
+      item = Book::ImageIndex::Item.new("sampleimg", 1, 'sample photo')
+      item.instance_eval{@path="./images/chap1-sampleimg.png"}
+      item
+    end
+
+    actual = compile_block "@<imgref>{sampleimg}\n"
+    expected = "\n\\reviewimageref{1.1}{image:chap1:sampleimg}「sample photo」\n"
+    assert_equal expected, actual
+  end
+
+  def test_inline_imgref2
+    def @chapter.image(id)
+      item = Book::NumberlessImageIndex::Item.new("sampleimg", 1)
+      item.instance_eval{@path="./images/chap1-sampleimg.png"}
+      item
+    end
+
+    actual = compile_block "@<imgref>{sampleimg}\n"
+    expected = "\n\\reviewimageref{1.1}{image:chap1:sampleimg}\n"
+    assert_equal expected, actual
   end
 
   def test_block_raw0

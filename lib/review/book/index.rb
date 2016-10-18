@@ -57,20 +57,32 @@ module ReVIEW
       def [](id)
         @index.fetch(id)
       rescue
+        if @index.keys.map{|i| i.split(/\|/).last }.flatten. # unfold all ids
+           reduce(Hash.new(0)){|h, i| h[i] += 1; h}. # number of occurrences
+           select{|k, v| k == id && v > 1 }.present? # detect duplicated
+          raise KeyError, "key '#{id}' is ambiguous for #{self.class}"
+        end
+
+        @items.each do |i|
+          if i.id.split(/\|/).include?(id)
+            return i
+          end
+        end
         raise KeyError, "not found key '#{id}' for #{self.class}"
       end
 
       def number(id)
-        @index.fetch(id).number.to_s
+        self[id].number.to_s
       end
 
       def each(&block)
         @items.each(&block)
       end
 
-      def has_key?(id)
-        return @index.has_key?(id)
+      def key?(id)
+        return @index.key?(id)
       end
+      alias_method :has_key?, :key?
     end
 
 
@@ -93,7 +105,7 @@ module ReVIEW
       end
 
       def display_string(id)
-        "#{number(id)}「#{title(id)}」"
+        "#{number(id)}#{I18n.t("chapter_quote", title(id))}"
       end
     end
 
@@ -107,7 +119,7 @@ module ReVIEW
 
     class TableIndex < Index
       def TableIndex.item_type
-        'table'
+        '(table|imgtable)'
       end
     end
 
@@ -132,17 +144,36 @@ module ReVIEW
 
 
     class ImageIndex < Index
+      def self.parse(src, *args)
+        items = []
+        seq = 1
+        src.grep(%r<^//#{item_type()}>) do |line|
+          # ex. ["//image", "id", "", "caption"]
+          elements = line.split(/\[(.*?)\]/)
+          if elements[1].present?
+            items.push item_class().new(elements[1], seq, elements[3])
+            seq += 1
+            if elements[1] == ""
+              warn "warning: no ID of #{item_type()} in #{line}"
+            end
+          end
+        end
+        new(items, *args)
+      end
+
       class Item
 
-        def initialize(id, number)
+        def initialize(id, number, caption = nil)
           @id = id
           @number = number
+          @caption = caption
           @path = nil
         end
 
         attr_reader :id
         attr_reader :number
-        attr_writer :index    # internal use only
+        attr_reader :caption
+        attr_writer :index # internal use only
 
         def bound?
           path
@@ -151,11 +182,10 @@ module ReVIEW
         def path
           @path ||= @index.find_path(id)
         end
-
       end
 
       def ImageIndex.item_type
-        '(image|graph)'
+        '(image|graph|imgtable)'
       end
 
       attr_reader :image_finder
@@ -176,7 +206,6 @@ module ReVIEW
       def find_path(id)
         @image_finder.find_path(id)
       end
-
     end
 
     class IconIndex < ImageIndex
@@ -210,28 +239,6 @@ module ReVIEW
       end
     end
 
-    class FormatRef
-      def initialize(locale, index)
-        @locale = locale
-        @index = index
-      end
-
-      def title(id)
-        sprintf(@locale["#{@index.item_type}_caption_format".intern],
-          @index.title(id))
-      end
-
-      def number(id)
-        sprintf(@locale["#{@index.item_type}_number_format".intern],
-          @index.number(id))
-      end
-
-      def method_missing(mid, *args, &block)
-        super unless @index.respond_to?(mid)
-        @index.__send__(mid, *args, &block)
-      end
-    end
-
     class BibpaperIndex < Index
       Item = Struct.new(:id, :number, :caption)
 
@@ -252,11 +259,6 @@ module ReVIEW
 
     class NumberlessImageIndex < ImageIndex
       class Item < ImageIndex::Item
-        def initialize(id, number)
-          @id = id
-          @number = ""
-          @path = nil
-        end
       end
 
       def NumberlessImageIndex.item_type
@@ -270,15 +272,10 @@ module ReVIEW
 
     class IndepImageIndex < ImageIndex
       class Item < ImageIndex::Item
-        def initialize(id, number)
-          @id = id
-          @number = ""
-          @path = nil
-        end
       end
 
       def IndepImageIndex.item_type
-        'indepimage'
+        '(indepimage|imgtable)'
       end
 
       def number(id)
@@ -346,19 +343,10 @@ module ReVIEW
 
       def number(id)
         n = @chap.number
-        if @chap.on_APPENDIX? && @chap.number > 1 && @chap.number < 28
-          type = @chap.book.config["appendix_format"].blank? ? "arabic" : @chap.book.config["appendix_format"].downcase.strip
-          n = case type
-              when "roman"
-                ROMAN[@chap.number]
-              when "alphabet", "alpha"
-                ALPHA[@chap.number]
-              else
-                # nil, "arabic", etc...
-                "#{@chap.number}"
-              end
+        if @chap.on_APPENDIX? && @chap.number > 0 && @chap.number < 28
+          n = @chap.format_number(false)
         end
-        return ([n] + @index.fetch(id).number).join(".")
+        return ([n] + self[id].number).join(".")
       end
     end
 
@@ -371,7 +359,7 @@ module ReVIEW
         seq = 1
         src.each do |line|
           if m = COLUMN_PATTERN.match(line)
-            level = m[1] ## not use it yet
+            _level = m[1] ## not use it yet
             id = m[2]
             caption = m[3].strip
             if !id || id == ""

@@ -54,7 +54,7 @@ class LineInputTest < Test::Unit::TestCase
     li.ungets('xyz')
     assert_equal 0, li.lineno
     li.ungets('xyz')
-    assert_equal -1, li.lineno # XXX: OK?
+    assert_equal(-1, li.lineno) # XXX: OK?
   end
 
   def test_peek
@@ -71,24 +71,6 @@ class LineInputTest < Test::Unit::TestCase
 
     li = LineInput.new(StringIO.new('abc'))
     assert li.next?
-  end
-
-  def test_skip_blank_lines
-    if "".respond_to?(:encode)
-      euc_jp_spc = "　".encode("EUC-JP")
-    else
-      euc_jp_spc = "\xa1\xa1" # EUC-JP 全角空白
-    end
-    [
-      ["", 0, nil],
-      ["\n \n  \nabc", 3, 'abc'],
-      ["\t", 1, nil],
-      [euc_jp_spc, 0, euc_jp_spc],
-    ].each do |text, n, rest|
-      li = LineInput.new(StringIO.new(text))
-      assert_equal n, li.skip_blank_lines
-      assert_equal rest, li.gets
-    end
   end
 
   def test_gets_if

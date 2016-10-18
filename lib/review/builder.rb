@@ -1,6 +1,6 @@
 # encoding: utf-8
 #
-# Copyright (c) 2002-2014 Minero Aoki, Kenshi Muto
+# Copyright (c) 2002-2016 Minero Aoki, Kenshi Muto
 #
 # This program is free software.
 # You can distribute or modify this program under the terms of
@@ -20,7 +20,7 @@ module ReVIEW
   class Builder
     include TextUtils
 
-    CAPTION_TITLES = %w(note memo tip info planning best important security caution term link notice point shoot reference practice expert)
+    CAPTION_TITLES = %w(note memo tip info warning important caution notice)
 
     def pre_paragraph
       nil
@@ -31,6 +31,7 @@ module ReVIEW
 
     def initialize(strict = false, *args)
       @strict = strict
+      @output = nil
       builder_init(*args)
     end
 
@@ -63,15 +64,11 @@ module ReVIEW
     alias_method :raw_result, :result
 
     def print(*s)
-      @output.print(*s.map{|i|
-        convert_outencoding(i, @book.config["outencoding"])
-      })
+      @output.print(*s)
     end
 
     def puts(*s)
-      @output.puts *s.map{|i|
-        convert_outencoding(i, @book.config["outencoding"])
-      }
+      @output.puts(*s)
     end
 
     def target_name
@@ -86,27 +83,27 @@ module ReVIEW
     end
     private :headline_prefix
 
-    def list(lines, id, caption)
+    def list(lines, id, caption, lang = nil)
       begin
-        list_header id, caption
+        list_header id, caption, lang
       rescue KeyError
         error "no such list: #{id}"
       end
-      list_body id, lines
+      list_body id, lines, lang
     end
 
-    def listnum(lines, id, caption)
+    def listnum(lines, id, caption, lang = nil)
       begin
-        list_header id, caption
+        list_header id, caption, lang
       rescue KeyError
         error "no such list: #{id}"
       end
-      listnum_body lines
+      listnum_body lines, lang
     end
 
-    def source(lines, caption)
+    def source(lines, caption, lang = nil)
       source_header caption
-      source_body lines
+      source_body lines, lang
     end
 
     def image(lines, id, caption, metric = nil)
@@ -220,6 +217,16 @@ module ReVIEW
       nofunc_text("[UnknownImage:#{id}]")
     end
 
+    def inline_imgref(id)
+      img = inline_img(id)
+
+      if @chapter.image(id).caption
+        "#{img}#{I18n.t('image_quote', @chapter.image(id).caption)}"
+      else
+        img
+      end
+    end
+
     def inline_table(id)
       "#{I18n.t("table")}#{@chapter.table(id).number}"
     rescue KeyError
@@ -272,16 +279,38 @@ module ReVIEW
 
     def inline_hd(id)
       m = /\A([^|]+)\|(.+)/.match(id)
-      chapter = @book.chapters.detect{|chap| chap.id == m[1]} if m && m[1]
-      return inline_hd_chap(chapter, m[2]) if chapter
-      return inline_hd_chap(@chapter, id)
+      if m && m[1]
+        chapter = @book.contents.detect{|chap| chap.id == m[1]}
+      end
+      if chapter
+        inline_hd_chap(chapter, m[2])
+      else
+        inline_hd_chap(@chapter, id)
+      end
+    rescue KeyError
+      error "unknown hd: #{id}"
+      nofunc_text("[UnknownHeader:#{id}]")
     end
 
     def inline_column(id)
-      @chapter.column(id).caption
-    rescue
+      m = /\A([^|]+)\|(.+)/.match(id)
+      chapter = @book.chapters.detect{|chap| chap.id == m[1]} if m && m[1]
+      if chapter
+        inline_column_chap(chapter, m[2])
+      else
+        inline_column_chap(@chapter, id)
+      end
+    rescue KeyError
       error "unknown column: #{id}"
       nofunc_text("[UnknownColumn:#{id}]")
+    end
+
+    def inline_column_chap(chapter, id)
+      chapter.column(id).caption
+    end
+
+    def inline_tcy(arg)
+      "#{arg}[rotate 90 degree]"
     end
 
     def raw(str)
@@ -318,23 +347,23 @@ module ReVIEW
       return "" if metric.blank?
       params = metric.split(/,\s*/)
       results = []
-      params.each do |p|
-        if p =~ /\A.+?::/
-          if p =~ /\A#{type}::/
-              p.sub!(/\A#{type}::/, '')
+      params.each do |param|
+        if param =~ /\A.+?::/
+          if param =~ /\A#{type}::/
+              param.sub!(/\A#{type}::/, '')
           else
             next
           end
         end
-        p = handle_metric(p)
-        results.push(p)
+        param2 = handle_metric(param)
+        results.push(param2)
       end
       return result_metric(results)
     end
 
     def get_chap(chapter = @chapter)
       if @book.config["secnolevel"] > 0 && !chapter.number.nil? && !chapter.number.to_s.empty?
-        return "#{chapter.number}"
+        return chapter.format_number(nil)
       end
       return nil
     end
@@ -342,7 +371,7 @@ module ReVIEW
     def extract_chapter_id(chap_ref)
       m = /\A([\w+-]+)\|(.+)/.match(chap_ref)
       if m
-        return [@book.chapters.detect{|chap| chap.id == m[1]}, m[2]]
+        return [@book.contents.detect{|chap| chap.id == m[1]}, m[2]]
       else
         return [@chapter, chap_ref]
       end
@@ -370,7 +399,7 @@ module ReVIEW
       line = self.unescape(lines.join("\n"))
       cmds = {
         :graphviz => "echo '#{line}' | dot -T#{image_ext} -o#{file_path}",
-        :gnuplot  => "echo 'set terminal " +
+        :gnuplot => "echo 'set terminal " +
         "#{(image_ext == "eps") ? "postscript eps" : image_ext}\n" +
         " set output \"#{file_path}\"\n#{line}' | gnuplot",
         :blockdiag => "echo '#{line}' "+
@@ -390,13 +419,12 @@ module ReVIEW
     end
 
     def inline_include(file_name)
-      compile_inline convert_inencoding(File.open(file_name).read,
-                                        @book.config["inencoding"])
+      compile_inline File.read(file_name)
     end
 
     def include(file_name)
       File.foreach(file_name) do |line|
-        paragraph([convert_inencoding(line, @book.config["inencoding"])])
+        paragraph([line])
       end
     end
 
@@ -433,4 +461,4 @@ module ReVIEW
     end
   end
 
-end   # module ReVIEW
+end # module ReVIEW

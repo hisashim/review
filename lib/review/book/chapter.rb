@@ -1,8 +1,6 @@
 #
-# $Id: book.rb 4315 2009-09-02 04:15:24Z kmuto $
-#
 # Copyright (c) 2002-2008 Minero Aoki
-#               2009 Minero Aoki, Kenshi Muto
+#               2009-2016 Minero Aoki, Kenshi Muto
 #
 # This program is free software.
 # You can distribute or modify this program under the terms of
@@ -10,11 +8,11 @@
 # For details of the GNU LGPL, see the file "COPYING".
 #
 require 'review/book/compilable'
+require 'review/lineinput'
+require 'review/preprocessor'
+
 module ReVIEW
   module Book
-    ROMAN = %w[0 I II III IV V VI VII VIII IX X XI XII XIII XIV XV XVI XVII XVIII XIX XX XXI XXII XXIII XXIV XXV XXVI XXVII]
-    ALPHA = %w[0 A B C D E F G H I J K L M N O P Q R S T U V W X Y Z]
-    
     class Chapter
       include Compilable
 
@@ -27,7 +25,19 @@ module ReVIEW
         @path = path
         @io = io
         @title = nil
-        @content = nil
+        if @io
+          begin
+            @content = @io.read
+          rescue
+            @content = nil
+          end
+        else
+          @content = nil
+        end
+        if !@content && @path && File.exist?(@path)
+          @content = File.read(@path, :mode => 'r:BOM|utf-8')
+          @number = nil if ['nonum', 'nodisp', 'notoc'].include?(find_first_header_option)
+        end
         @list_index = nil
         @table_index = nil
         @footnote_index = nil
@@ -37,6 +47,25 @@ module ReVIEW
         @indepimage_index = nil
         @headline_index = nil
         @column_index = nil
+        @volume = nil
+      end
+
+      def find_first_header_option
+        f = LineInput.new(Preprocessor::Strip.new(StringIO.new(@content)))
+        while f.next?
+          case f.peek
+          when /\A=+[\[\s\{]/
+            m = /\A(=+)(?:\[(.+?)\])?(?:\{(.+?)\})?(.*)/.match(f.gets)
+            return m[2] # tag
+          when %r</\A//[a-z]+/>
+            line = f.gets
+            if line.rstrip[-1,1] == "{"
+              f.until_match(%r<\A//\}>)
+            end
+          end
+          f.gets
+        end
+        nil
       end
 
       def inspect
@@ -44,27 +73,27 @@ module ReVIEW
       end
 
       def format_number(heading = true)
+        return "" unless @number
+
         if on_PREDEF?
           return "#{@number}"
         end
 
         if on_APPENDIX?
           return "#{@number}" if @number < 1 || @number > 27
+          if @book.config["appendix_format"]
+            raise ReVIEW::ConfigError,
+            "'appendix_format:' in config.yml is obsoleted."
+          end
 
-          type = @book.config["appendix_format"].blank? ? "arabic" : @book.config["appendix_format"].downcase.strip
-          appendix = case type
-                       when "roman"
-                         ROMAN[@number]
-                       when "alphabet", "alpha"
-                         ALPHA[@number]
-                       else
-                         # nil, "arabic", etc...
-                         "#{@number}"
-                     end
+          i18n_appendix = I18n.get("appendix")
+          fmt = i18n_appendix.scan(/%\w{1,3}/).first || "%s"
+          I18n.update({"appendix_without_heading" => fmt})
+
           if heading
-            return "#{I18n.t("appendix", appendix)}"
+            return I18n.t("appendix", @number)
           else
-            return "#{appendix}"
+            return I18n.t("appendix_without_heading", @number)
           end
         end
 
@@ -93,7 +122,7 @@ module ReVIEW
 
       private
       def on_FILE?(contents)
-        contents.lines.map(&:strip).include?(id() + @book.ext())
+        contents.lines.map(&:strip).include?("#{id()}#{@book.ext()}")
       end
     end
   end

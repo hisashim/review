@@ -8,6 +8,7 @@
 # the GNU LGPL, Lesser General Public License version 2.1.
 #
 
+require 'cgi/util'
 module ReVIEW
 
   module HTMLUtils
@@ -24,6 +25,7 @@ module ReVIEW
     end
 
     alias_method :escape, :escape_html
+    alias_method :h, :escape_html
 
     def unescape_html(str)
       # FIXME better code
@@ -40,24 +42,37 @@ module ReVIEW
       str.gsub('-', '&#45;')
     end
 
-    def highlight(ops)
-      body = ops[:body] || ''
-      lexer = ops[:lexer] || ''
-      format = ops[:format] || ''
+    def highlight?
+      @book.config["highlight"] &&
+        @book.config["highlight"]["html"] == "pygments"
+    end
 
-      return body if @book.config["pygments"].nil?
+    def highlight(ops)
+      if @book.config["pygments"].present?
+        raise ReVIEW::ConfigError, "'pygments:' in config.yml is obsoleted."
+      end
+
+      body = ops[:body] || ''
+      if @book.config["highlight"] && @book.config["highlight"]["lang"]
+        lexer = @book.config["highlight"]["lang"] # default setting
+      else
+        lexer = 'text'
+      end
+      lexer = ops[:lexer] if ops[:lexer].present?
+      format = ops[:format] || ''
+      options = {:nowrap => true, :noclasses => true}
+      if ops[:options] && ops[:options].kind_of?(Hash)
+        options.merge!(ops[:options])
+      end
+      return body if !highlight?
 
       begin
         require 'pygments'
         begin
-          Pygments.highlight(
-                   unescape_html(body),
-                   :options => {
-                               :nowrap => true,
-                               :noclasses => true
-                             },
-                   :formatter => format,
-                   :lexer => lexer)
+          Pygments.highlight(unescape_html(body),
+                             :options => options,
+                             :formatter => format,
+                             :lexer => lexer)
         rescue MentosError
           body
         end
@@ -77,4 +92,4 @@ module ReVIEW
     end
   end
 
-end   # module ReVIEW
+end # module ReVIEW

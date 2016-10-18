@@ -1,7 +1,7 @@
 # encoding: utf-8
 #
 # Copyright (c) 2002-2007 Minero Aoki
-#               2008-2014 Minero Aoki, Kenshi Muto
+#               2008-2016 Minero Aoki, Kenshi Muto
 #
 # This program is free software.
 # You can distribute or modify this program under the terms of
@@ -24,15 +24,9 @@ module ReVIEW
     Compiler.defsingle(:dtp, 1)
 
     Compiler.defblock(:insn, 0..1)
-    Compiler.defblock(:memo, 0..1)
-    Compiler.defblock(:tip, 0..1)
-    Compiler.defblock(:info, 0..1)
     Compiler.defblock(:planning, 0..1)
     Compiler.defblock(:best, 0..1)
-    Compiler.defblock(:important, 0..1)
     Compiler.defblock(:security, 0..1)
-    Compiler.defblock(:caution, 0..1)
-    Compiler.defblock(:notice, 0..1)
     Compiler.defblock(:point, 0..1)
     Compiler.defblock(:shoot, 0..1)
     Compiler.defblock(:reference, 0)
@@ -69,6 +63,7 @@ module ReVIEW
       @sec_counter = SecCounter.new(5, @chapter)
       @column = 0
       @noindent = nil
+      @ol_num = nil
       @rootelement = "doc"
       @secttags = nil
       @tsize = nil
@@ -76,16 +71,17 @@ module ReVIEW
       @texinlineequation = 0
       print %Q(<?xml version="1.0" encoding="UTF-8"?>\n)
       print %Q(<#{@rootelement} xmlns:aid="http://ns.adobe.com/AdobeInDesign/4.0/">)
-      if @book.config["nolf"].present?
-        IDGXMLBuilder.class_eval do
-          def puts(arg)
-            print arg
-          end
-        end
-      end
       @secttags = true unless @book.config["structuredxml"].nil?
     end
     private :builder_init_file
+
+    def puts(arg)
+      if @book.config["nolf"].present?
+        print arg
+      else
+        super
+      end
+    end
 
     def result
       s = ""
@@ -301,11 +297,7 @@ module ReVIEW
     end
 
     def read(lines)
-      if @book.config["deprecated-blocklines"].nil?
-        puts %Q[<lead>#{split_paragraph(lines).join}</lead>]
-      else
-        puts %Q[<p aid:pstyle="lead">#{lines.join}</p>]
-      end
+      puts %Q[<lead>#{split_paragraph(lines).join}</lead>]
     end
 
     alias_method :lead, :read
@@ -316,15 +308,12 @@ module ReVIEW
     end
     private :column_label
 
-    def inline_column(id)
+    def inline_column_chap(chapter, id)
       if @book.config["chapterlink"]
-        %Q(<link href="#{column_label(id)}">#{escape_html(@chapter.column(id).caption)}</link>)
+        %Q(<link href="#{column_label(id)}">#{escape_html(chapter.column(id).caption)}</link>)
       else
-        escape_html(@chapter.column(id).caption)
+        escape_html(chapter.column(id).caption)
       end
-    rescue KeyError
-      error "unknown column: #{id}"
-      nofunc_text("[UnknownColumn:#{id}]")
     end
 
     def inline_list(id)
@@ -336,7 +325,7 @@ module ReVIEW
       end
     end
 
-    def list_header(id, caption)
+    def list_header(id, caption, lang)
       puts %Q[<codelist>]
       if get_chap.nil?
         puts %Q[<caption>#{I18n.t("list")}#{I18n.t("format_number_without_chapter", [@chapter.list(id).number])}#{I18n.t("caption_prefix_idgxml")}#{compile_inline(caption)}</caption>]
@@ -361,17 +350,17 @@ module ReVIEW
       end
     end
 
-    def list_body(id, lines)
+    def list_body(id, lines, lang)
       print %Q(<pre>)
       codelines_body(lines)
       puts "</pre></codelist>"
     end
 
-    def emlist(lines, caption = nil)
+    def emlist(lines, caption = nil, lang = nil)
       quotedlist lines, 'emlist', caption
     end
 
-    def emlistnum(lines, caption = nil)
+    def emlistnum(lines, caption = nil, lang = nil)
       _lines = []
       lines.each_with_index do |line, i|
         _lines << detab("<span type='lineno'>" + (i + 1).to_s.rjust(2) + ": </span>" + line)
@@ -379,7 +368,7 @@ module ReVIEW
       quotedlist _lines, 'emlistnum', caption
     end
 
-    def listnum_body(lines)
+    def listnum_body(lines, lang)
       print %Q(<pre>)
       no = 1
       lines.each_with_index do |line, i|
@@ -403,7 +392,7 @@ module ReVIEW
 
     def quotedlist(lines, css_class, caption)
       print %Q[<list type='#{css_class}'>]
-      puts "<caption aid:pstyle='#{css_class}-title'>#{compile_inline(caption)}</caption>" unless caption.nil?
+      puts "<caption aid:pstyle='#{css_class}-title'>#{compile_inline(caption)}</caption>" if caption.present?
       print %Q[<pre>]
       no = 1
       lines.each do |line|
@@ -423,12 +412,8 @@ module ReVIEW
     private :quotedlist
 
     def quote(lines)
-      if @book.config["deprecated-blocklines"].nil?
-        blocked_lines = split_paragraph(lines)
-        puts "<quote>#{blocked_lines.join("")}</quote>"
-      else
-        puts "<quote>#{lines.join("\n")}</quote>"
-      end
+      blocked_lines = split_paragraph(lines)
+      puts "<quote>#{blocked_lines.join("")}</quote>"
     end
 
     def inline_table(id)
@@ -446,6 +431,19 @@ module ReVIEW
         "<span type='image'>#{I18n.t("image")}#{I18n.t("format_number_without_chapter", [chapter.image(id).number])}</span>"
       else
         "<span type='image'>#{I18n.t("image")}#{I18n.t("format_number", [get_chap(chapter), chapter.image(id).number])}</span>"
+      end
+    end
+
+    def inline_imgref(id)
+      chapter, id = extract_chapter_id(id)
+      if chapter.image(id).caption.blank?
+        inline_img(id)
+      else
+        if get_chap(chapter).nil?
+          "<span type='image'>#{I18n.t("image")}#{I18n.t("format_number_without_chapter", [chapter.image(id).number])}#{I18n.t('image_quote', chapter.image(id).caption)}</span>"
+        else
+          "<span type='image'>#{I18n.t("image")}#{I18n.t("format_number", [get_chap(chapter), chapter.image(id).number])}#{I18n.t('image_quote', chapter.image(id).caption)}</span>"
+        end
       end
     end
 
@@ -499,8 +497,8 @@ module ReVIEW
     def table(lines, id = nil, caption = nil)
       tablewidth = nil
       col = 0
-      unless @book.config["tableopt"].nil?
-        tablewidth = @book.config["tableopt"].split(",")[0].to_f / 0.351 # mm -> pt
+      if @book.config["tableopt"]
+        tablewidth = @book.config["tableopt"].split(",")[0].to_f / @book.config["pt_to_mm_unit"].to_f
       end
       puts "<table>"
       rows = []
@@ -527,8 +525,8 @@ module ReVIEW
           cellwidth = @tsize.split(/\s*,\s*/)
           totallength = 0
           cellwidth.size.times do |n|
-            cellwidth[n] = cellwidth[n].to_f / 0.351 # mm -> pt
-            totallength = totallength + cellwidth[n]
+            cellwidth[n] = cellwidth[n].to_f / @book.config["pt_to_mm_unit"].to_f
+            totallength += cellwidth[n]
             warn "total length exceeds limit for table: #{id}" if totallength > tablewidth
           end
           if cellwidth.size < col
@@ -561,7 +559,7 @@ module ReVIEW
           else
             i = 0
             rows.shift.split(/\t/).each_with_index do |cell, x|
-              print %Q[<td xyh="#{x + 1},#{y + 1},#{sepidx}" aid:table="cell" aid:theader="1" aid:crows="1" aid:ccols="1" aid:ccolwidth="#{sprintf("%.13f", cellwidth[i])}">#{cell.sub("DUMMYCELLSPLITTER", "")}</td>]
+              print %Q[<td xyh="#{x + 1},#{y + 1},#{sepidx}" aid:table="cell" aid:theader="1" aid:crows="1" aid:ccols="1" aid:ccolwidth="#{sprintf("%.3f", cellwidth[i])}">#{cell.sub("DUMMYCELLSPLITTER", "")}</td>]
               i += 1
             end
           end
@@ -582,7 +580,7 @@ module ReVIEW
         rows.each_with_index do |row, y|
           i = 0
           row.split(/\t/).each_with_index do |cell, x|
-            print %Q[<td xyh="#{x + 1},#{y + 1 + sepidx},#{sepidx}" aid:table="cell" aid:crows="1" aid:ccols="1" aid:ccolwidth="#{sprintf("%.13f", cellwidth[i])}">#{cell.sub("DUMMYCELLSPLITTER", "")}</td>]
+            print %Q[<td xyh="#{x + 1},#{y + 1 + sepidx},#{sepidx}" aid:table="cell" aid:crows="1" aid:ccols="1" aid:ccolwidth="#{sprintf("%.3f", cellwidth[i])}">#{cell.sub("DUMMYCELLSPLITTER", "")}</td>]
             i += 1
           end
         end
@@ -614,6 +612,19 @@ module ReVIEW
 
     def table_end
       print "<?dtp tablerow last?>"
+    end
+
+    def imgtable(lines, id, caption = nil, metric = nil)
+      if @chapter.image(id).bound?
+        metrics = parse_metric("idgxml", metric)
+        puts "<table>"
+        table_header id, caption
+        puts %Q[<imgtable><Image href="file://#{@chapter.image(id).path.sub(/\A.\//, "")}"#{metrics} /></imgtable>]
+        puts "</table>"
+      else
+        warn "image not bound: #{id}" if @strict
+        image_dummy id, caption, lines
+      end
     end
 
     def comment(str)
@@ -747,7 +758,7 @@ module ReVIEW
     end
 
     def inline_labelref(idref)
-      %Q[<ref idref='#{escape_html(idref)}'>「●●　#{escape_html(idref)}」</ref>] # FIXME:節名とタイトルも込みで要出力
+      %Q[<ref idref='#{escape_html(idref)}'>「#{I18n.t("label_marker")}#{escape_html(idref)}」</ref>] # FIXME:節名とタイトルも込みで要出力
     end
 
     alias_method :inline_ref, :inline_labelref
@@ -800,7 +811,7 @@ module ReVIEW
       @column += 1
       a_id = %Q[id="column-#{@column}"]
       print "<#{type}column #{a_id}>"
-      puts %Q[<title aid:pstyle="#{type}column-title">#{compile_inline(caption)}</title>]
+      puts %Q[<title aid:pstyle="#{type}column-title">#{compile_inline(caption)}</title><?dtp level="9" section="#{escape_html(compile_inline(caption))}"?>]
     end
 
     def common_column_end(type)
@@ -880,11 +891,7 @@ module ReVIEW
     end
 
     def flushright(lines)
-      if @book.config["deprecated-blocklines"].nil?
-        puts split_paragraph(lines).join.gsub("<p>", "<p align='right'>")
-      else
-        puts "<p align='right'>#{lines.join("\n")}</p>"
-      end
+      puts split_paragraph(lines).join.gsub("<p>", "<p align='right'>")
     end
 
     def centering(lines)
@@ -895,12 +902,8 @@ module ReVIEW
       print "<#{type}>"
       style = specialstyle.nil? ? "#{type}-title" : specialstyle
       puts "<title aid:pstyle='#{style}'>#{compile_inline(caption)}</title>" unless caption.nil?
-      if @book.config["deprecated-blocklines"].nil?
-        blocked_lines = split_paragraph(lines)
-        puts "#{blocked_lines.join}</#{type}>"
-      else
-        puts "#{lines.join("\n")}</#{type}>"
-      end
+      blocked_lines = split_paragraph(lines)
+      puts "#{blocked_lines.join}</#{type}>"
     end
 
     def note(lines, caption = nil)
@@ -937,6 +940,10 @@ module ReVIEW
 
     def caution(lines, caption = nil)
       captionblock("caution", lines, caption)
+    end
+
+    def warning(lines, caption = nil)
+      captionblock("warning", lines, caption)
     end
 
     def term(lines)
@@ -1071,7 +1078,7 @@ module ReVIEW
       lines.each do |l|
         print l.gsub("&lt;", "<").gsub("&gt;", ">").gsub("&quot;", "\"").gsub("&amp;", "&")
         print "\n" unless lines.length == no
-        no = no + 1
+        no += 1
       end
     end
 
@@ -1082,8 +1089,7 @@ module ReVIEW
     def inline_chapref(id)
       chs = ["", "「", "」"]
       unless @book.config["chapref"].nil?
-        _chs = convert_inencoding(@book.config["chapref"],
-                                  @book.config["inencoding"]).split(",")
+        _chs = @book.config["chapref"].split(",")
         if _chs.size != 3
           error "--chapsplitter must have exactly 3 parameters with comma."
         else
@@ -1130,7 +1136,7 @@ module ReVIEW
       puts %Q[<caption>#{compile_inline(caption)}</caption>]
     end
 
-    def source_body(lines)
+    def source_body(lines, lang)
       puts %Q[<pre>]
       codelines_body(lines)
       puts %Q[</pre></source>]
@@ -1161,10 +1167,10 @@ module ReVIEW
       if chap.number
         n = chap.headline_index.number(id)
         if @book.config["secnolevel"] >= n.split('.').size
-          return "「#{n}　#{compile_inline(chap.headline(id).caption)}」"
+          return I18n.t("chapter_quote", "#{n}　#{compile_inline(chap.headline(id).caption)}")
         end
       end
-      "「#{compile_inline(chap.headline(id).caption)}」"
+      I18n.t("chapter_quote", compile_inline(chap.headline(id).caption))
     end
 
     def inline_recipe(id)
@@ -1182,4 +1188,4 @@ module ReVIEW
 
   end
 
-end   # module ReVIEW
+end # module ReVIEW

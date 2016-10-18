@@ -1,8 +1,6 @@
 #
-# $Id: book.rb 4315 2009-09-02 04:15:24Z kmuto $
-#
 # Copyright (c) 2002-2008 Minero Aoki
-#               2009 Minero Aoki, Kenshi Muto
+#               2009-2016 Minero Aoki, Kenshi Muto
 #
 # This program is free software.
 # You can distribute or modify this program under the terms of
@@ -42,12 +40,17 @@ module ReVIEW
         @basedir_seen[dir] = true
       end
 
+      def self.clear_rubyenv
+        @basedir_seen = {}
+      end
+
       def initialize(basedir)
         @basedir = basedir
         @parts = nil
         @chapter_index = nil
         @config = ReVIEW::Configure.values
         @catalog = nil
+        @read_part = nil
       end
 
       def bib_file
@@ -84,8 +87,20 @@ module ReVIEW
         end
       end
 
+      def htmlversion
+        if config["htmlversion"].blank?
+          nil
+        else
+          config["htmlversion"].to_i
+        end
+      end
+
       def parts
         @parts ||= read_parts()
+      end
+
+      def parts=(parts)
+        @parts = parts
       end
 
       def parts_in_file
@@ -102,6 +117,15 @@ module ReVIEW
         parts.each(&block)
       end
 
+      def contents
+        # TODO: includes predef, appendix, postdef
+        if parts.present?
+          chapters + parts
+        else
+          chapters
+        end
+      end
+
       def chapters
         parts().map {|p| p.chapters }.flatten
       end
@@ -111,7 +135,7 @@ module ReVIEW
       end
 
       def each_chapter_r(&block)
-        chapters.reverse.each(&block)
+        chapters.reverse_each(&block)
       end
 
       def chapter_index
@@ -158,19 +182,9 @@ module ReVIEW
         @config ||= Configure.values
       end
 
-      # backward compatible
-      def param=(param)
-        @config = param
-      end
-
       def load_config(filename)
         new_conf = YAML.load_file(filename)
         @config.merge!(new_conf)
-      end
-
-      # backward compatible
-      def param
-        @config
       end
 
       def catalog
@@ -178,10 +192,14 @@ module ReVIEW
 
         catalogfile_path = "#{basedir}/#{config["catalogfile"]}"
         if File.file? catalogfile_path
-          @catalog = Catalog.new(File.open catalogfile_path)
+          @catalog = File.open(catalogfile_path){|f| Catalog.new(f) }
         end
 
         @catalog
+      end
+
+      def catalog=(catalog)
+        @catalog = catalog
       end
 
       def read_CHAPS
@@ -217,12 +235,12 @@ module ReVIEW
       end
 
       def read_PART
-        return @read_PART if @read_PART
+        return @read_part if @read_part
 
         if catalog
-          @read_PART = catalog.parts
+          @read_part = catalog.parts
         else
-          @read_PART = File.read("#{@basedir}/#{config["part_file"]}")
+          @read_part = File.read("#{@basedir}/#{config["part_file"]}")
         end
       end
 
@@ -300,6 +318,8 @@ module ReVIEW
         list
       end
 
+      # return Array of Part, not Chapter
+      #
       def parse_chapters
         part = 0
         num = 0
@@ -308,26 +328,32 @@ module ReVIEW
           return catalog.parts_with_chaps.map do |entry|
             if entry.is_a? Hash
               chaps = entry.values.first.map do |chap|
-                Chapter.new(self, (num += 1), chap, "#{@basedir}/#{chap}")
+                chap = Chapter.new(self, (num += 1), chap, "#{@basedir}/#{chap}")
+                chap
               end
               Part.new(self, (part += 1), chaps, read_PART.split("\n")[part - 1])
             else
               chap = Chapter.new(self, (num += 1), entry, "#{@basedir}/#{entry}")
+              if chap.number
+                num = chap.number
+              else
+                num -= 1
+              end
               Part.new(self, nil, [chap])
             end
           end
         end
 
         chap = read_CHAPS()\
-          .strip.lines.map {|line| line.strip }.join("\n").split(/\n{2,}/)\
-          .map {|part_chunk|
+               .strip.lines.map {|line| line.strip }.join("\n").split(/\n{2,}/)\
+               .map {|part_chunk|
           chaps = part_chunk.split.map {|chapid|
             Chapter.new(self, (num += 1), chapid, "#{@basedir}/#{chapid}")
           }
-          if part_exist? && read_PART.split("\n").size >= part
+          if part_exist? && read_PART.split("\n").size > part
             Part.new(self, (part += 1), chaps, read_PART.split("\n")[part-1])
           else
-            Part.new(self, (part += 1), chaps)
+            Part.new(self, nil, chaps)
           end
         }
         return chap
@@ -335,8 +361,7 @@ module ReVIEW
 
       def mkpart_from_namelistfile(path)
         chaps = []
-        File.read(path).split.each_with_index do |name, idx|
-          name.sub!(/\A\xEF\xBB\xBF/u, '') # remove BOM
+        File.read(path, :mode => 'r:BOM|utf-8').split.each_with_index do |name, idx|
           if path =~ /PREDEF/
             chaps << mkchap(name)
           else
@@ -372,9 +397,8 @@ module ReVIEW
 
       def read_FILE(filename)
         res = ""
-        File.open("#{@basedir}/#{filename}") do |f|
+        File.open("#{@basedir}/#{filename}", 'r:BOM|utf-8') do |f|
           while line = f.gets
-            line.sub!(/\A\xEF\xBB\xBF/u, '') # remove BOM
             if /\A#/ =~ line
               next
             end
